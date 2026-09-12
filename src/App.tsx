@@ -15,6 +15,8 @@ import { TemporizadorPomodoro } from './dominio/servicios/TemporizadorPomodoro'
 // Infraestructura
 import { RepositorioLocalStorage } from './infraestructura/persistencia/RepositorioLocalStorage'
 import { GeneradorSonidoWeb } from './infraestructura/audio/GeneradorSonidoWeb'
+import { ServicioAutenticacionFirebase } from './infraestructura/firebase/ServicioAutenticacionFirebase'
+import { RepositorioFirestore } from './infraestructura/firebase/RepositorioFirestore'
 
 // Casos de Uso
 import { IniciarDiaTrabajo } from './aplicacion/casos-de-uso/IniciarDiaTrabajo'
@@ -31,23 +33,26 @@ import { GraficoHistorialAvance } from './presentacion/componentes/GraficoHistor
 import { ModalIniciarDia } from './presentacion/componentes/ModalIniciarDia'
 import { ModalActualizarPeso } from './presentacion/componentes/ModalActualizarPeso'
 import { PestanaCuentaAuth } from './presentacion/componentes/PestanaCuentaAuth'
+import { PantallaBienvenida } from './presentacion/componentes/PantallaBienvenida'
+import { PantallaOnboarding } from './presentacion/componentes/PantallaOnboarding'
 
 export function App() {
-  // Instancias de infraestructura (persistentes)
-  const repositorio = useMemo(() => new RepositorioLocalStorage(), [])
+  // Instancias de infraestructura
+  const repositorioLocal = useMemo(() => new RepositorioLocalStorage(), [])
   const servicioSonido = useMemo(() => new GeneradorSonidoWeb(), [])
   const gestorEjercicios = useMemo(() => new GestorEjercicios(), [])
 
-  // Casos de uso
-  const casoIniciarDia = useMemo(() => new IniciarDiaTrabajo(repositorio), [repositorio])
-  const casoRegistrarAgua = useMemo(() => new RegistrarConsumoAgua(repositorio), [repositorio])
-  const casoActualizarPeso = useMemo(() => new ActualizarPesoUsuario(repositorio), [repositorio])
+  // Casos de uso vinculados al repositorio
+  const casoIniciarDia = useMemo(() => new IniciarDiaTrabajo(repositorioLocal), [repositorioLocal])
+  const casoRegistrarAgua = useMemo(() => new RegistrarConsumoAgua(repositorioLocal), [repositorioLocal])
+  const casoActualizarPeso = useMemo(() => new ActualizarPesoUsuario(repositorioLocal), [repositorioLocal])
 
-  // Estados de aplicación
+  // Estado de Usuario y Sesión
   const [usuarioActual, setUsuarioActual] = useState<Usuario | null>(null)
   const [usuariosDisponibles, setUsuariosDisponibles] = useState<Usuario[]>([])
   const [registroDia, setRegistroDia] = useState<RegistroDia | null>(null)
   const [pestanaActiva, setPestanaActiva] = useState<TipoPestana>('CONCENTRACION')
+  const [cargandoSesion, setCargandoSesion] = useState(true)
 
   // Temporizador y Ejercicios
   const [configTrabajoMin, setConfigTrabajoMin] = useState(25)
@@ -69,44 +74,64 @@ export function App() {
   const [modalIniciarDiaAbierto, setModalIniciarDiaAbierto] = useState(false)
   const [modalPesoAbierto, setModalPesoAbierto] = useState(false)
 
-  // Fecha de hoy en formato YYYY-MM-DD
+  // Fecha de hoy (YYYY-MM-DD)
   const fechaHoyIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
-  // Cargar usuario y datos iniciales
-  const cargarDatosUsuario = useCallback(async () => {
-    let usuario = await repositorio.obtenerUsuarioActual()
-    const todos = (await repositorio.listarUsuariosLocales?.()) || []
+  // Suscripción de sesión persistente con Firebase y LocalStorage
+  useEffect(() => {
+    const desuscribir = ServicioAutenticacionFirebase.suscribirseAEstadoSesion(async (authUsuario) => {
+      if (authUsuario) {
+        // Intentar recuperar de Firestore o LocalStorage
+        const repoRemoto = new RepositorioFirestore(authUsuario.id)
+        let usuario = await repoRemoto.obtenerUsuarioActual()
 
-    if (!usuario) {
-      // Perfil por defecto inicial
-      usuario = {
-        id: `usr_${Date.now()}`,
-        nombre: 'Luis',
-        pesoActualKg: 72,
-        alturaCm: 175,
-        historialPesos: [
-          { id: `peso_${Date.now()}`, fechaIso: fechaHoyIso, pesoKg: 72, nota: 'Peso inicial' },
-        ],
-        historialDias: {},
-        creadoEnIso: new Date().toISOString(),
+        if (!usuario) {
+          usuario = await repositorioLocal.obtenerUsuarioActual()
+        }
+
+        if (usuario && usuario.id === authUsuario.id) {
+          setUsuarioActual(usuario)
+        } else {
+          // Usuario autenticado que aún no completó su perfil físico
+          setUsuarioActual({
+            id: authUsuario.id,
+            nombre: authUsuario.nombre,
+            email: authUsuario.email || undefined,
+            pesoActualKg: 0,
+            alturaCm: 0,
+            edad: 0,
+            historialPesos: [],
+            historialDias: {},
+            creadoEnIso: new Date().toISOString(),
+          })
+        }
+      } else {
+        // Modo local o no autenticado
+        const uLocal = await repositorioLocal.obtenerUsuarioActual()
+        setUsuarioActual(uLocal)
       }
-      await repositorio.guardarUsuario(usuario)
-    }
+      setCargandoSesion(false)
+    })
 
-    setUsuarioActual(usuario)
-    setUsuariosDisponibles(todos.length > 0 ? todos : [usuario])
+    return () => desuscribir()
+  }, [repositorioLocal])
 
-    // Cargar registro de hoy
-    const reg = await repositorio.obtenerRegistroDia(usuario.id, fechaHoyIso)
+  // Cargar registros diarios cuando hay usuario activo
+  const cargarRegistroDiario = useCallback(async (usuarioId: string) => {
+    const reg = await repositorioLocal.obtenerRegistroDia(usuarioId, fechaHoyIso)
     if (reg) {
       setRegistroDia(reg)
       setZonaSeleccionada(reg.zonaElegida)
     }
-  }, [repositorio, fechaHoyIso])
+    const todos = (await repositorioLocal.listarUsuariosLocales?.()) || []
+    setUsuariosDisponibles(todos)
+  }, [repositorioLocal, fechaHoyIso])
 
   useEffect(() => {
-    cargarDatosUsuario()
-  }, [cargarDatosUsuario])
+    if (usuarioActual && usuarioActual.pesoActualKg > 0) {
+      cargarRegistroDiario(usuarioActual.id)
+    }
+  }, [usuarioActual, cargarRegistroDiario])
 
   // Lista de ejercicios de la zona activa
   const ejerciciosDeZona = useMemo<Ejercicio[]>(() => {
@@ -135,19 +160,17 @@ export function App() {
             servicioSonido.reproducirSonidoPausaActiva()
             servicioSonido.enviarNotificacionNavegador(
               '¡Pausa Activa!',
-              'Momento de despejar la mente y activar el cuerpo.'
+              'Despejá la mente y realizá el ejercicio propuesto.'
             )
-            // Cambiar automáticamente al siguiente ejercicio
             setIndiceEjercicioActual((prev) => prev + 1)
           } else if (nuevoEstado.faseActual === TipoFase.TRABAJO) {
             servicioSonido.reproducirSonidoInicioTrabajo()
             servicioSonido.enviarNotificacionNavegador(
-              'Volver a Enfoque',
-              'Comienza una nueva sesión de concentración.'
+              'A Concentrarse',
+              'Comienza tu bloque de enfoque y productividad.'
             )
           }
 
-          // Registrar pomodoro completado si el usuario está activo
           if (usuarioActual && fasePrevia === TipoFase.TRABAJO) {
             const actualDia = registroDia || {
               fechaIso: fechaHoyIso,
@@ -164,7 +187,7 @@ export function App() {
               ...actualDia,
               pomodorosCompletados: actualDia.pomodorosCompletados + 1,
             }
-            repositorio.guardarRegistroDia(usuarioActual.id, regActualizado).then(() => {
+            repositorioLocal.guardarRegistroDia(usuarioActual.id, regActualizado).then(() => {
               setRegistroDia(regActualizado)
             })
           }
@@ -175,7 +198,7 @@ export function App() {
     return () => {
       if (intervalo) clearInterval(intervalo)
     }
-  }, [estadoTemp.estaCorriendo, servicioSonido, usuarioActual, registroDia, fechaHoyIso, zonaSeleccionada, repositorio])
+  }, [estadoTemp.estaCorriendo, servicioSonido, usuarioActual, registroDia, fechaHoyIso, zonaSeleccionada, repositorioLocal])
 
   // Controles del Temporizador
   const iniciarTemporizador = () => {
@@ -249,36 +272,48 @@ export function App() {
     })
     setUsuarioActual(usuarioActualizado)
     setModalPesoAbierto(false)
+
+    // Sincronizar en Firestore si hay sesión
+    if (usuarioActualizado.email) {
+      const repoRemoto = new RepositorioFirestore(usuarioActualizado.id)
+      repoRemoto.guardarUsuario(usuarioActualizado).catch(() => {})
+    }
   }
 
-  // Guardar o Crear Perfil
-  const crearOActualizarPerfil = async (
-    nombre: string,
-    pesoKg: number,
-    alturaCm: number,
-    email?: string
-  ) => {
-    const usuario: Usuario = {
-      id: usuarioActual?.id || `usr_${Date.now()}`,
-      nombre,
-      email,
-      pesoActualKg: pesoKg,
-      alturaCm,
-      historialPesos: usuarioActual?.historialPesos || [
-        { id: `peso_${Date.now()}`, fechaIso: fechaHoyIso, pesoKg },
+  // Completar Onboarding Físico (Peso, Altura, Edad)
+  const completarOnboarding = async (datos: {
+    nombre: string
+    edad: number
+    pesoKg: number
+    alturaCm: number
+  }) => {
+    const usuarioId = usuarioActual?.id || `usr_${Date.now()}`
+    const nuevoUsuario: Usuario = {
+      id: usuarioId,
+      nombre: datos.nombre,
+      email: usuarioActual?.email,
+      pesoActualKg: datos.pesoKg,
+      alturaCm: datos.alturaCm,
+      edad: datos.edad,
+      historialPesos: [
+        { id: `peso_${Date.now()}`, fechaIso: fechaHoyIso, pesoKg: datos.pesoKg, nota: 'Perfil inicial' },
       ],
-      historialDias: usuarioActual?.historialDias || {},
-      creadoEnIso: usuarioActual?.creadoEnIso || new Date().toISOString(),
+      historialDias: {},
+      creadoEnIso: new Date().toISOString(),
     }
-    await repositorio.guardarUsuario(usuario)
-    setUsuarioActual(usuario)
-    const todos = (await repositorio.listarUsuariosLocales?.()) || [usuario]
-    setUsuariosDisponibles(todos)
+
+    await repositorioLocal.guardarUsuario(nuevoUsuario)
+    if (nuevoUsuario.email) {
+      const repoRemoto = new RepositorioFirestore(nuevoUsuario.id)
+      await repoRemoto.guardarUsuario(nuevoUsuario).catch(() => {})
+    }
+
+    setUsuarioActual(nuevoUsuario)
   }
 
   // Exportar / Importar JSON
   const exportarJSON = () => {
-    const json = repositorio.exportarDatosJSON()
+    const json = repositorioLocal.exportarDatosJSON()
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -289,12 +324,11 @@ export function App() {
   }
 
   const importarJSON = (jsonString: string) => {
-    const exito = repositorio.importarDatosJSON(jsonString)
+    const exito = repositorioLocal.importarDatosJSON(jsonString)
     if (exito) {
-      cargarDatosUsuario()
-      alert('¡Datos restaurados con éxito!')
+      window.location.reload()
     } else {
-      alert('El archivo de copia de seguridad no es válido.')
+      alert('El archivo de respaldo no es válido.')
     }
   }
 
@@ -310,20 +344,78 @@ export function App() {
     }
   }, [estadoTemp.faseActual, configTrabajoMin, configPausaMin])
 
+  if (cargandoSesion) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: 'var(--color-texto-secundario)' }}>
+        Cargando Pomodoro Fit...
+      </div>
+    )
+  }
+
+  // PANTALLA 1: Bienvenida e Inicio de Sesión con Google o Local
+  if (!usuarioActual) {
+    return (
+      <PantallaBienvenida
+        alAutenticarGoogle={(datos) => {
+          setUsuarioActual({
+            id: datos.id,
+            nombre: datos.nombre,
+            email: datos.email || undefined,
+            pesoActualKg: 0,
+            alturaCm: 0,
+            edad: 0,
+            historialPesos: [],
+            historialDias: {},
+            creadoEnIso: new Date().toISOString(),
+          })
+        }}
+        alContinuarComoInvitado={() => {
+          setUsuarioActual({
+            id: `invitado_${Date.now()}`,
+            nombre: 'Luis',
+            pesoActualKg: 0,
+            alturaCm: 0,
+            edad: 0,
+            historialPesos: [],
+            historialDias: {},
+            creadoEnIso: new Date().toISOString(),
+          })
+        }}
+      />
+    )
+  }
+
+  // PANTALLA 2: Onboarding Físico si faltan datos de peso, edad o altura
+  const necesitaOnboarding =
+    !usuarioActual.pesoActualKg ||
+    usuarioActual.pesoActualKg <= 0 ||
+    !usuarioActual.alturaCm ||
+    usuarioActual.alturaCm <= 0 ||
+    !usuarioActual.edad ||
+    usuarioActual.edad <= 0
+
+  if (necesitaOnboarding) {
+    return (
+      <PantallaOnboarding
+        nombreInicial={usuarioActual.nombre}
+        emailInicial={usuarioActual.email}
+        alCompletarPerfil={completarOnboarding}
+      />
+    )
+  }
+
+  // PANTALLA 3: Tablero Principal (Espacioso, no amontonado, estándar Impeccable)
   return (
     <div className="contenedor-app">
-      {/* Contrato visual Impeccable */}
-      {/* THESIS: Pomodoro con pausas de calistenia y seguimiento hídrico estricto, sin distracciones ni tarjetas decorativas. */}
-      {/* OWN-WORLD: Paleta deportiva profunda, grafismo nítido en SVG y Web Audio integrado. */}
-
       <BarraSuperior
         usuarioActual={usuarioActual}
         usuariosDisponibles={usuariosDisponibles}
         pestanaActiva={pestanaActiva}
         alCambiarPestana={setPestanaActiva}
         alCambiarUsuario={async (id) => {
-          await repositorio.seleccionarUsuarioActivo(id)
-          cargarDatosUsuario()
+          await repositorioLocal.seleccionarUsuarioActivo(id)
+          const u = await repositorioLocal.obtenerUsuarioActual()
+          setUsuarioActual(u)
         }}
         alExportarJSON={exportarJSON}
         alImportarJSON={importarJSON}
@@ -331,7 +423,7 @@ export function App() {
 
       <main>
         {pestanaActiva === 'CONCENTRACION' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2.5rem' }}>
             <SelectorZonaCorporal
               zonaSeleccionada={zonaSeleccionada}
               alSeleccionarZona={(zona) => {
@@ -339,7 +431,7 @@ export function App() {
                 setIndiceEjercicioActual(0)
                 if (usuarioActual && registroDia) {
                   const regActualizado: RegistroDia = { ...registroDia, zonaElegida: zona }
-                  repositorio.guardarRegistroDia(usuarioActual.id, regActualizado)
+                  repositorioLocal.guardarRegistroDia(usuarioActual.id, regActualizado)
                   setRegistroDia(regActualizado)
                 }
               }}
@@ -368,7 +460,7 @@ export function App() {
           </div>
         )}
 
-        {pestanaActiva === 'HIDRATACION' && usuarioActual && (
+        {pestanaActiva === 'HIDRATACION' && (
           <PanelHidratacion
             usuario={usuarioActual}
             registroDia={registroDia}
@@ -378,7 +470,7 @@ export function App() {
           />
         )}
 
-        {pestanaActiva === 'HISTORIAL' && usuarioActual && (
+        {pestanaActiva === 'HISTORIAL' && (
           <GraficoHistorialAvance
             historialPesos={usuarioActual.historialPesos}
             historialDias={usuarioActual.historialDias || {}}
@@ -389,17 +481,19 @@ export function App() {
         {pestanaActiva === 'CUENTA' && (
           <PestanaCuentaAuth
             usuarioActual={usuarioActual}
-            alCrearOActualizarPerfilLocal={crearOActualizarPerfil}
+            alCrearOActualizarPerfilLocal={(nombre, pesoKg, alturaCm, email) => {
+              completarOnboarding({ nombre, edad: usuarioActual.edad || 25, pesoKg, alturaCm })
+            }}
             alCerrarSesion={async () => {
+              await ServicioAutenticacionFirebase.cerrarSesion()
               setUsuarioActual(null)
-              setPestanaActiva('CUENTA')
             }}
           />
         )}
       </main>
 
       {/* Modales */}
-      {modalIniciarDiaAbierto && usuarioActual && (
+      {modalIniciarDiaAbierto && (
         <ModalIniciarDia
           pesoUsuarioKg={usuarioActual.pesoActualKg}
           zonaActual={zonaSeleccionada}
@@ -408,7 +502,7 @@ export function App() {
         />
       )}
 
-      {modalPesoAbierto && usuarioActual && (
+      {modalPesoAbierto && (
         <ModalActualizarPeso
           pesoActualKg={usuarioActual.pesoActualKg}
           alturaCm={usuarioActual.alturaCm}

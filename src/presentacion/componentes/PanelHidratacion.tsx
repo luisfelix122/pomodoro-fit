@@ -123,7 +123,7 @@ export const PanelHidratacion: React.FC<PropiedadesPanelHidratacion> = ({
           <strong style={{ color: 'var(--color-agua)' }}>{porcentajeTotal}%</strong>
         </div>
         <div className="barra-progreso-agua">
-          <div className="barra-progreso-relleno" style={{ width: `${porcentajeTotal}%` }} />
+          <div className="barra-progreso-relleno" style={{ transform: `scaleX(${porcentajeTotal / 100})` }} />
         </div>
       </div>
 

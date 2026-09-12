@@ -22,29 +22,32 @@ export class GestorFirebase {
   private static auth: Auth | null = null
   private static db: Firestore | null = null
 
-  static estaConfigurado(): boolean {
-    const apiKey = import.meta.env.VITE_FIREBASE_API_KEY
-    const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID
-    return Boolean(apiKey && projectId && apiKey !== 'TU_API_KEY')
+  private static readonly CONFIG_PREDETERMINADA: ConfiguracionFirebaseCredenciales = {
+    projectId: 'vialgo-app',
+    appId: '1:919641122811:web:ea90a2ce99e03a617f8d5e',
+    storageBucket: 'vialgo-app.firebasestorage.app',
+    apiKey: 'AIzaSyD2NlgQL5LUBJ2sf4u7T2MQlOW8AeNN9As',
+    authDomain: 'vialgo-app.firebaseapp.com',
+    messagingSenderId: '919641122811',
   }
 
-  static obtenerApp(): FirebaseApp | null {
-    if (!this.estaConfigurado()) {
-      return null
-    }
+  static estaConfigurado(): boolean {
+    return true
+  }
 
+  static obtenerApp(): FirebaseApp {
     if (!this.app) {
       const apps = getApps()
       if (apps.length > 0) {
         this.app = apps[0]
       } else {
         const config: ConfiguracionFirebaseCredenciales = {
-          apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-          authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || `${import.meta.env.VITE_FIREBASE_PROJECT_ID}.firebaseapp.com`,
-          projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-          storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-          messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-          appId: import.meta.env.VITE_FIREBASE_APP_ID,
+          apiKey: import.meta.env.VITE_FIREBASE_API_KEY || this.CONFIG_PREDETERMINADA.apiKey,
+          authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || this.CONFIG_PREDETERMINADA.authDomain,
+          projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || this.CONFIG_PREDETERMINADA.projectId,
+          storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || this.CONFIG_PREDETERMINADA.storageBucket,
+          messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || this.CONFIG_PREDETERMINADA.messagingSenderId,
+          appId: import.meta.env.VITE_FIREBASE_APP_ID || this.CONFIG_PREDETERMINADA.appId,
         }
         this.app = initializeApp(config)
       }

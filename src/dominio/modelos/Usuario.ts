@@ -7,6 +7,7 @@ export interface Usuario {
   email?: string
   pesoActualKg: number
   alturaCm: number
+  edad?: number
   historialPesos: RegistroPeso[]
   historialDias: Record<string, RegistroDia> // Clave formato YYYY-MM-DD
   creadoEnIso: string
